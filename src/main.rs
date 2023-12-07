@@ -32,7 +32,7 @@ async fn report_matches(matches: &Vec<String>, domain: &str) -> Result<(), Box<d
             "domain": domain
         });
         let text = format!("{}\n", data);
-        tokio::io::stdout().write_all(text.as_bytes()).await?
+        tokio::io::stdout().write_all(text.as_bytes()).await?;
     }
     Ok(())
 }
@@ -74,10 +74,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let lines: Vec<String> =
         BufReader::new(File::open(args.regex_file).expect("Cannot open regex file"))
             .lines()
-            .map(|l| l.unwrap())
+            .map(|l| l.unwrap_or_default())
             .filter(|l| !l.is_empty())
             .collect();
-    let set = RegexSet::new(lines).expect("failed to compile regexes from file");
+
+    // Fix: https://docs.rs/regex/latest/regex/enum.Error.html#variant.CompiledTooBig
+    // Increase the size limit for the compiled regex set to 100 MB (or adjust as needed)
+    let size_limit = 100 * 1024 * 1024;
+    let regex_set_builder = regex::RegexSetBuilder::new(lines.iter())
+        .size_limit(size_limit)
+        .build();
+
+    let set = match regex_set_builder {
+        Ok(set) => set,
+        Err(e) => {
+            eprintln!("Error building regex set: {}", e);
+            return Ok(());
+        }
+    };
 
     loop {
         // Connect to websocket stream
@@ -90,12 +104,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 tokio::spawn(async move {
                     if let Ok(data) = msg.and_then(|msg| msg.into_text()) {
                         if let Err(e) = check_json(&data, &set).await {
-                            eprintln!("Error! {}", e)
+                            eprintln!("Error! {}", e);
                         }
                     }
                 });
             })
             .await;
     }
-    // Ok(())
 }
